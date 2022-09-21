@@ -1,0 +1,700 @@
+<!DOCTYPE HTML>
+<style>
+    /* CSS */
+    .main-container {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+    }
+
+</style>
+<html>
+
+<head>
+    <!-- Latest compiled and minified CSS -->
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.4.1/css/bootstrap.min.css">
+
+    <!-- jQuery library -->
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+
+    <!-- Latest compiled JavaScript -->
+    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/3.4.1/js/bootstrap.min.js"></script>
+</head>
+<!-- HTML !-->
+
+<body>
+<div id="sse" class="main-container">
+    <div class="btn-group btn-group-xs pull-right">
+        <div class="btn-group btn-group-xs">
+            <button id="bitrateset" autocomplete="off" class="btn btn-primary dropdown-toggle" data-toggle="dropdown"
+                    disabled>
+                Bandwidth<span class="caret"></span>
+            </button>
+            <ul id="bitrate" class="dropdown-menu" role="menu">
+                <li><a href="#" id="0">No limit</a></li>
+                <li><a href="#" id="128">Cap to 128kbit</a></li>
+                <li><a href="#" id="256">Cap to 256kbit</a></li>
+                <li><a href="#" id="512">Cap to 512kbit</a></li>
+                <li><a href="#" id="1024">Cap to 1mbit</a></li>
+                <li><a href="#" id="1500">Cap to 1.5mbit</a></li>
+                <li><a href="#" id="2000">Cap to 2mbit</a></li>
+            </ul>
+        </div>
+    </div>
+    <video loop id="playback" width="320" height="240" controls autoplay muted>
+        <source src="h264.mp4" type="video/mp4">
+        <source type="video/mp4" src="">
+        !
+        <p>Sorry! Your browser does not support the video element.</p>
+    </video>
+    <video loop id="playback2" width="320" height="240" controls autoplay muted>
+        <source src="earth.webm" type="video/webm">
+        <source type="video/webm" src="">
+        !
+        <p>Sorry! Your browser does not support the video element.</p>
+    </video>
+    <form>
+        <div>
+            <input type="radio" id="full-trickle"
+                   name="contact" value="full-trickle">
+            <label for="full-trickle">full-trickle</label>
+
+            <input type="radio" id="half-trickle"
+                   name="contact" value="half-trickle" checked>
+            <label for="half-trickle">half-trickle</label>
+
+            <input type="radio" id="ice-gathering"
+                   name="contact" value="ice-gathering" >
+            <label for="ice-gathering">ice-gathering</label>
+        </div>
+
+        <label for="ip">IP:</label><br>
+        <input type="text" id="ip" name="ip" value="192.208.3.132:443">
+        <br><br>
+        <label for="vin">VIN:</label><br>
+        <input type="text" id="vin" name="vin">
+        <br><br>
+        <div id="wrapper">
+            <label>WS CONNECTION</label>
+            <p>
+                <input id="disconnect_radio" type="radio" name="yes_no" checked disabled>Disconnected</input>
+            </p>
+            <p>
+                <input id="connect_radio" type="radio" name="yes_no" disabled>Connected</input>
+            </p>
+        </div>
+
+        <div id="sdpOffercandidate">
+            <label>offer candidate</label><br>
+            <textarea id="w3review1" name="w3review1" rows="8" cols="80">
+		</textarea>
+        </div>
+
+        <div id="sdpanswercandidate">
+            <label>answer candidate</label><br>
+            <textarea id="answerCandidate" name="answerCandidate" rows="8" cols="80">
+		</textarea>
+        </div>
+
+        <br><br>
+    </form>
+
+    <button id="startVideo" class="button-28" onclick="WebSocketTest()" role="button" width="100px">Accept
+        Stream
+    </button>
+    <button id="terminate" class="button-28" onclick="leaveSessionReq()" role="button" width="100px">Terminate
+        session
+    </button>
+</div>
+</body>
+
+</html>
+
+<script type="text/javascript">
+
+    var ecuId = Math.random().toString(16).slice(2);
+    var ws;
+    var pc1;
+    let description;
+    const offerOptions = {
+        offerToReceiveAudio: 1,
+        offerToReceiveVideo: 1,
+        trickle: !$("#full-trickle").is(':checked')
+    };
+    var selectedVideoTag;
+    var videoTag;
+    var candidates;
+    var offer;
+    var localStream;
+    var startTime;
+    var sessionId;
+    var last_candidate;
+    var ice_gathering_finished = false
+    var join_sent = false;
+    var terminateRequested;
+    var reconnectAttempts = 4//1; set reconnect to false
+    var isReconnecting = false;
+    document.getElementById('terminate').style.display = "none";
+    document.getElementById('startVideo').style.display = "block";
+
+    function sendChangePublishStream(bitrate) {
+        var vin_txt = document.getElementById('vin').value
+
+        const commandChangePublishStream  =
+            {
+                "envelopeSchema": "com.gm.cei.messaging.types.v1.Command",
+                "messagingMode": "TEST",
+                "command": {
+                    "id": Math.random().toString(16).slice(2),
+                    "header": {
+                        "publisherId": "Vehicle",
+                        "name": "changePublishStream",
+                        "version": "1.0",
+                        "requestedOn": "",
+                        "contentType": "application/json",
+                        "contentSchema": "com.gm.ccms.ccs.v1.createSessionReq",
+                        "acceptLanguage": "en-US"
+                    },
+                    body: JSON.stringify({ id: vin_txt, bitrate: bitrate })
+                }
+            }
+
+        if (ws){
+            ws.send(JSON.stringify(commandChangePublishStream));
+        }
+    }
+
+    $("#bitrate a").click(function() {
+        var id = $(this).attr("id");
+        var bitrate = parseInt(id)*1000;
+        if(bitrate !== 0) {
+            sendChangePublishStream(bitrate)
+            //sfutest.send({ message: { request: "configure", bitrate: bitrate }});
+        }
+    });
+
+    async function peerAddIceCandidate(pc, i, force) {
+        if (!$("#full-trickle").is(':checked') || force) {
+            console.log("trying to add candidate " + i.candidate)
+            if (i){
+                await pc.addIceCandidate(i)
+                console.log("add ice candidate to peer")
+            }
+        }
+    }
+
+    function sendJoin(ws, pc) {
+        var vin_txt = document.getElementById('vin').value
+
+        if(pc1.localDescription == null){
+            console.log("pc1.localDescription is null")
+        }
+
+        const joinSessionReq = {
+            "envelopeSchema": "com.gm.cei.messaging.types.v1.Command",
+            "messagingMode": "TEST",
+            "command": {
+                "id": Math.random().toString(16).slice(2),
+                "header": {
+                    "publisherId": "Vehicle",
+                    "name": "joinSessionReq",
+                    "version": "1.0",
+                    "requestedOn": "2021-11-24 06:53:32.576",
+                    "contentType": "application/json",
+                    "contentSchema": "com.gm.ccms.ccs.v1.joinSessionReq",
+                    "acceptLanguage": "en-US"
+                },
+                body: JSON.stringify({
+                    messagePayload: pc1.localDescription.sdp,
+                    vin: vin_txt,
+                    ecuId: ecuId,
+                    trickle: !$("#ice-gathering").is(':checked')
+                })
+            }
+        }
+
+        ws.send(JSON.stringify(joinSessionReq));
+        join_sent = true
+        console.log("ws join sent")
+    }
+
+    function getVideoTracks() {
+        var videoTracks;
+        var localStream2;
+        var videoTag2;
+
+        if(selectedVideoTag === document.getElementById("playback2")){
+            var videoTag2 = selectedVideoTag = document.getElementById("playback")
+        }else{
+            var videoTag2 = selectedVideoTag = document.getElementById("playback2")
+
+        }
+        localStream2 = videoTag2.captureStream(0);
+        videoTracks = localStream2.getVideoTracks()[0];
+
+        return videoTracks;
+    }
+
+    function leaveSessionReq() {
+        terminateRequested = true;
+        const leaveSessionReq = {
+            "envelopeSchema": "com.gm.cei.messaging.types.v1.Command",
+            "messagingMode": "TEST",
+            "command": {
+                "id": Math.random().toString(16).slice(2),
+                "header": {
+                    "publisherId": "Vehicle",
+                    "name": "leaveSessionReq",
+                    "version": "1.0",
+                    "requestedOn": "",
+                    "contentType": "application/json",
+                    "contentSchema": "com.gm.ccms.ccs.v1.leaveSessionReq",
+                    "acceptLanguage": "en-US"
+                },
+                body: JSON.stringify({ sessionId: sessionId, terminateReason: "USER_DECISION" })
+            }
+        }
+        ws.send(JSON.stringify(leaveSessionReq));
+        pc1.close();
+        document.getElementById('terminate').style.display = "none";
+        document.getElementById('startVideo').style.display = "block";
+    }
+
+    function initRTCPeerConnection() {
+        videoTag = selectedVideoTag = document.getElementById("playback");
+        localStream = videoTag.captureStream(0);
+        const videoTracks = localStream.getVideoTracks();
+        const audioTracks = localStream.getAudioTracks();
+        if (videoTracks.length > 0) {
+            console.log(`Using video device: ${videoTracks[0].label}`);
+        }
+        if (audioTracks.length > 0) {
+            console.log(`Using audio device: ${audioTracks[0].label}`);
+        }
+        const configuration = {};
+        configuration["iceServers"] = [{url: 'stun:stun.1.google.com:19302'}]
+
+        console.log('RTCPeerConnection configuration:', configuration);
+
+        var pc_constraints = {
+            // "optional": [{"DtlsSrtpKeyAgreement": true}]
+        };
+
+        pc1 = new RTCPeerConnection(configuration, pc_constraints);
+
+        console.log('Created local peer connection object pc1');
+
+        pc1.addEventListener('icecandidate', e => onIceCandidate(pc1, e));
+        pc1.addEventListener('iceconnectionstatechange', e => onIceStateChange(pc1, e));
+
+        localStream.getTracks().forEach(
+            function (track) {
+                pc1.addTrack(
+                    track,
+                    localStream
+                );
+            }
+        );
+
+        console.log('Added local stream to pc1');
+
+        pc1.createOffer(offerOptions).then(offer1 => {
+                pc1.setLocalDescription(offer1).then(()=>{
+                    onSetLocalSuccess(pc1);
+                })
+            })
+
+    }
+
+    function onSetLocalSuccess(pc) {
+        console.log(` setLocalDescription complete`);
+        var vin_txt = document.getElementById('vin').value
+    }
+
+    function onSetRemoteSuccess() {
+        console.log(` setRemoteDescription complete`);
+        document.getElementById('terminate').style.display = "block";
+        document.getElementById('startVideo').style.display = "none";
+    }
+
+    function onSetSessionDescriptionError(error) {
+        console.log(`Failed to set session description: ${error.toString()}`);
+    }
+
+    async function onCreateAnswerSuccess(desc) {
+        console.log('pc1 setRemoteDescription start');
+        let arr = desc.sdp.split("\n");
+        let result = arr.filter(function (str) {
+            return str.includes("a=candidate");
+        })
+        result.forEach(element => {
+            document.getElementById('answerCandidate').textContent += "\n" + element
+        });
+        try {
+            await pc1.setRemoteDescription(desc);
+            onSetRemoteSuccess();
+        } catch (e) {
+            console.error(e)
+            onSetSessionDescriptionError(e);
+        }
+    }
+
+    async function WebSocketTest() {
+        console.log('Starting call');
+        startTime = window.performance.now();
+        videoTag = selectedVideoTag = document.getElementById("playback");
+
+        if (!pc1) {
+            localStream = videoTag.captureStream(0);
+            const videoTracks = localStream.getVideoTracks();
+            const audioTracks = localStream.getAudioTracks();
+            if (videoTracks.length > 0) {
+                console.log(`Using video device: ${videoTracks[0].label}`);
+            }
+            if (audioTracks.length > 0) {
+                console.log(`Using audio device: ${audioTracks[0].label}`);
+            }
+            const configuration = {};
+            configuration["iceServers"] = [{url: 'stun:stun.1.google.com:19302'}]
+            // configuration["sdpSemantics"] = "unified-plan";
+            // configuration["forceEncodedAudioInsertableStreams"] = true;
+            // configuration["forceEncodedVideoInsertableStreams"] = true;
+            // configuration["encodedInsertableStreams"] = true;
+
+            console.log('RTCPeerConnection configuration:', configuration);
+
+            var pc_constraints = {
+                // "optional": [{"DtlsSrtpKeyAgreement": true}]
+            };
+
+            pc1 = new RTCPeerConnection(configuration, pc_constraints);
+
+            console.log('Created local peer connection object pc1');
+
+            pc1.addEventListener('icecandidate', e => onIceCandidate(pc1, e));
+            pc1.addEventListener('iceconnectionstatechange', e => onIceStateChange(pc1, e));
+
+            localStream.getTracks().forEach(
+                function (track) {
+                    pc1.addTrack(
+                        track,
+                        localStream
+                    );
+                }
+            );
+
+            console.log('Added local stream to pc1');
+
+            pc1.createOffer(offerOptions).then(offer1 => {
+                offer = offer1;
+                onCreateOfferSuccess(offer).then((a) => {
+                    createWS(a)
+                })
+            })
+        }
+
+
+        function onCreateSessionDescriptionError(error) {
+            console.log(`Failed to create session description: ${error.toString()}`);
+        }
+
+        async function onCreateOfferSuccess(desc) {
+            description = desc
+        }
+
+        async function reconnect() {
+            await new Promise(resolve => setTimeout(resolve, 7000 * reconnectAttempts));
+            reconnectAttempts++;
+
+            console.log("Attempting reconnect...");
+
+            ws = undefined;
+            isReconnecting = true;
+            createWS("empty")
+        }
+
+        function createWS(a) {
+            terminateRequested = false;
+
+            console.log(a)
+            console.log('moving to create ws');
+            var ip_addr = document.getElementById('ip').value
+            var vin_txt = document.getElementById('vin').value
+            if ("WebSocket" in window) {
+                // Let us open a web socket
+                ws = new WebSocket(`ws://${ip_addr}/VCU/vehicles/${vin_txt}/cameras/connect/${ecuId}`);
+
+                ws.onopen = function () {
+                    // Web Socket is connected, send data using send()
+                    document.getElementById("disconnect_radio").checked = false;
+                    document.getElementById("connect_radio").checked = true;
+                    document.getElementById("bitrateset").disabled = false;
+
+                    pc1.setLocalDescription(description).then(()=>{
+                        onSetLocalSuccess(pc1);
+                    })
+                };
+
+                ws.onpong =function(mess) { console.log(' receive a pong : ' + mess); ws.pong()};
+
+                ws.onping = function(mess) { console.log(' receive a ping : ' + mess); ws.ping()};
+
+                ws.onmessage = async function (evt) {
+                    var received_msg = evt.data;
+                    const obj = JSON.parse(received_msg);
+
+                    if (!obj.command.id) {
+                        console.error("no id for command " + obj.command.header.name)
+                    }
+
+                    if (obj.command.header.name === "createSessionReq" && !isReconnecting) {
+                        if (!pc1.localDescription) {
+                            console.log("why localDescription null?")
+                            await pc1.setLocalDescription(description)
+                        }
+
+                        console.log("ws create received")
+
+                        if (!$("#ice-gathering").is(':checked') || ($("#ice-gathering").is(':checked') && ice_gathering_finished && !join_sent)) {
+                            sendJoin(ws, pc1)
+                        }
+
+                    } else if (obj.command.header.name === "joinSessionRes" && !isReconnecting) {
+                        console.log("ws join res received")
+
+                        let answer = {type: "answer", sdp: JSON.parse(obj.command.body).messagePayload}
+
+                        sessionId = JSON.parse(obj.command.body).sessionId
+                        onCreateAnswerSuccess(answer)
+                        // alert("webrtc start")
+                    } else if (obj.command.header.name === "leaveSessionNotfn") {
+                        document.getElementById('terminate').style.display = "none";
+                        document.getElementById('startVideo').style.display = "block";
+                        sessionId = JSON.parse(obj.command.body).sessionId
+                        const commandResponse = {
+                            "envelopeSchema": "com.gm.cei.messaging.types.v1.Command",
+                            "messagingMode": "TEST",
+                            "command": {
+                                "id": Math.random().toString(16).slice(2),
+                                "header": {
+                                    "publisherId": "Vehicle",
+                                    "name": "commandResponse",
+                                    "version": "1.0",
+                                    "requestedOn": "",
+                                    "contentType": "application/json",
+                                    "contentSchema": "com.gm.ccms.ccs.v1.commandResponse",
+                                    "acceptLanguage": "en-US"
+                                },
+                                body: JSON.stringify({
+                                    sessionId: sessionId,
+                                    status: "SUCCESS",
+                                    requestId: obj.command.id
+                                })
+                            }
+                        }
+                        terminateRequested = true
+                        ws.send(JSON.stringify(commandResponse));
+                        pc1.close()
+                    } else if (obj.command.header.name === "notifyTrickle") {
+                        var last_candidate = obj.command.body.candidate
+                        try {
+                            if (pc1.canTrickleIceCandidates) {
+                                while (typeof (i = candidates.shift()) !== 'undefined') {
+                                    pc1.addIceCandidate(i);
+                                    peerAddIceCandidate(pc1, i, true)
+                                }
+                                peerAddIceCandidate(pc1, last_candidate, true)
+                            } else {
+                                if (!candidates) {
+                                    candidates = [];
+                                }
+                                candidates.push(last_candidate);
+                            }
+                        } catch (e) {
+                            console.error(e)
+                        }
+
+                    } else if (obj.command.header.name === "changeCameraViewReq") {
+                        sessionId = JSON.parse(obj.command.body).sessionId
+                        const commandResponse = {
+                            "envelopeSchema": "com.gm.cei.messaging.types.v1.Command",
+                            "messagingMode": "TEST",
+                            "command": {
+                                "id": Math.random().toString(16).slice(2),
+                                "header": {
+                                    "publisherId": "Vehicle",
+                                    "name": "commandResponse",
+                                    "version": "1.0",
+                                    "requestedOn": "",
+                                    "contentType": "application/json",
+                                    "contentSchema": "com.gm.ccms.ccs.v1.commandResponse",
+                                    "acceptLanguage": "en-US"
+                                },
+                                body: JSON.stringify({
+                                    sessionId: sessionId,
+                                    status: "SUCCESS",
+                                    requestId: obj.command.id
+                                })
+                            }
+                        }
+
+                        videoTracks = getVideoTracks()
+
+                        var sender = pc1.getSenders().find(function (s) {
+                            return s.track.kind === videoTracks.kind;
+                        });
+                        sender.replaceTrack(videoTracks);
+
+                        console.log("changeCameraViewRes")
+                        ws.send(JSON.stringify(commandResponse));
+
+                    } else if (obj.command.header.name === "changeLightSettingReq") {
+                        JSON.parse(obj.command.body).sessionId
+                        const commandResponse = {
+                            "envelopeSchema": "com.gm.cei.messaging.types.v1.Command",
+                            "messagingMode": "TEST",
+                            "command": {
+                                "id": Math.random().toString(16).slice(2),
+                                "header": {
+                                    "publisherId": "Vehicle",
+                                    "name": "commandResponse",
+                                    "version": "1.0",
+                                    "requestedOn": "",
+                                    "contentType": "application/json",
+                                    "contentSchema": "com.gm.ccms.ccs.v1.commandResponse",
+                                    "acceptLanguage": "en-US"
+                                },
+                                body: JSON.stringify({
+                                    sessionId: sessionId,
+                                    status: "SUCCESS",
+                                    requestId: obj.command.id
+                                })
+                            }
+                        }
+                        console.log("changeLightSettingRes")
+
+                        ws.send(JSON.stringify(commandResponse));
+                    }
+                };
+                ws.onclose = function () {
+                    // websocket is closed.
+                    if (terminateRequested || reconnectAttempts > 3) {
+                        document.getElementById("disconnect_radio").checked = true;
+                        document.getElementById("connect_radio").checked = false;
+                        document.getElementById("w3review1").value = "";
+                        document.getElementById("answerCandidate").value = "";
+                        alert("Connection is closed...");
+                        window.location.reload();
+                    } else {
+                        reconnect();
+                    }
+
+                };
+            } else {
+                // The browser doesn't support WebSocket
+                alert("WebSocket NOT supported by your Browser!");
+            }
+        }
+    }
+
+    function sendTrickleCandidate(candidate) {
+        if (ws.readyState === WebSocket.OPEN){
+            var vin_txt = document.getElementById('vin').value
+            const commandTrickle =
+                {
+                    "envelopeSchema": "com.gm.cei.messaging.types.v1.Command",
+                    "messagingMode": "TEST",
+                    "command": {
+                        "id": Math.random().toString(16).slice(2),
+                        "header": {
+                            "publisherId": "Vehicle",
+                            "name": "sendTrickleForICE",
+                            "version": "1.0",
+                            "requestedOn": "",
+                            "contentType": "application/json",
+                            "contentSchema": "com.gm.ccms.ccs.v1.sendTrickleForICE",
+                            "acceptLanguage": "en-US"
+                        },
+                        body: JSON.stringify({id: vin_txt, candidate: candidate })
+                    }
+                }
+            ws.send(JSON.stringify(commandTrickle));
+            console.log("trickle" + candidate)
+        }
+    }
+
+    async function onIceCandidate(pc, event) {
+        console.log(event);
+        console.log("%%%% pc1.canTrickleIceCandidates" + pc1.canTrickleIceCandidates)
+        if (event.candidate != null) {
+            try {
+                if (pc1 && event.candidate.candidate && event.candidate.sdpMid && event.candidate.sdpMLineIndex){
+                    last_candidate = {
+                        "candidate": event.candidate.candidate,
+                        "sdpMid": event.candidate.sdpMid,
+                        "sdpMLineIndex": event.candidate.sdpMLineIndex
+                    };
+                    document.getElementById('w3review1').textContent += "\n" + event.candidate.candidate
+
+                    await sendTrickleCandidate(last_candidate);
+                    if(pc1.canTrickleIceCandidates){
+                        while( typeof (i = candidates.shift()) !== 'undefined' ) {
+                            peerAddIceCandidate(pc1, i)
+                            // await sendTrickleCandidate(i);
+                        }
+                        peerAddIceCandidate(pc1, last_candidate)
+                        // await sendTrickleCandidate(last_candidate);
+                    }else{
+                        if(!candidates){
+                            candidates = [];
+                        }
+                        candidates.push(last_candidate);
+                    }
+                }
+            } catch (e) {
+                console.error(e);
+            }
+        }
+        // verify that at least one candidate received
+        else if(last_candidate){
+            ice_gathering_finished = true
+
+            if($("#ice-gathering").is(':checked') && !join_sent){
+                sendJoin(ws, pc1)
+            }else if($("#full-trickle").is(':checked') || $("#half-trickle").is(':checked')){
+                sendTrickleCandidate({"completed": true});
+                console.log("null + " + event.candidate)
+            }
+        }
+    }
+
+    function onIceStateChange(pc, event) {
+        if (pc) {
+            console.log(`******************ICE state: ${pc.iceConnectionState}`);
+            console.log('ICE state change event: ', event);
+
+            if(pc1.canTrickleIceCandidates){
+                while(candidates && typeof (i = candidates.shift()) !== 'undefined' ) {
+                    peerAddIceCandidate(pc1, i)
+                    // sendTrickleCandidate(i);
+                }
+            }
+
+            if(pc.iceConnectionState === "connected" ||
+                pc.iceConnectionState === "completed"){
+                localStream = videoTag.captureStream(0);
+                // pc1 = new RTCPeerConnection(configuration);
+                localStream.getTracks().forEach(
+                    function (track) {
+                        pc1.addTrack(
+                            track,
+                            localStream
+                        );
+                    }
+                );
+            }
+        }
+    }
+
+</script>

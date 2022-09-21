@@ -1,0 +1,576 @@
+<!DOCTYPE HTML>
+<style>
+	/* CSS */
+	.main-container {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+	}
+	.dot {
+		height: 25px;
+		width: 25px;
+		background-color: #db2222;
+		border-radius: 50%;
+		display: inline-block;
+		margin-top: 64px;
+		margin-right: 200px;
+		animation: blinker 1s linear infinite;
+
+	}
+	@keyframes blinker {
+		50% {
+			opacity: 0;
+		}
+	}
+</style>
+
+<head>
+	<!-- Latest compiled and minified CSS -->
+	<link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.4.1/css/bootstrap.min.css">
+
+	<!-- jQuery library -->
+	<script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+
+	<!-- Latest compiled JavaScript -->
+	<script src="https://maxcdn.bootstrapcdn.com/bootstrap/3.4.1/js/bootstrap.min.js"></script>
+</head>
+
+<body>
+<div id="sse" class="main-container">
+
+	<form>
+		<div>
+			<input type="radio" id="full-trickle"
+				   name="contact" value="full-trickle">
+			<label for="full-trickle">full-trickle</label>
+
+			<input type="radio" id="half-trickle"
+				   name="contact" value="half-trickle" checked>
+			<label for="half-trickle">half-trickle</label>
+
+			<input type="radio" id="ice-gathering"
+				   name="contact" value="ice-gathering" >
+			<label for="ice-gathering">ice-gathering</label>
+		</div>
+		<label for="ip">IP:</label><br>
+		<input type="text" id="ip" name="ip" value="192.208.3.132:443">
+		<br><br>
+		<label for="vin">VIN:</label><br>
+		<input type="text" id="vin" name="vin">
+		<br><br>
+		<label for="client_id">CLIENT ID:</label><br>
+		<input type="text" id="client_id" name="client_id">
+		<br><br>
+
+		<div id="wrapper">
+			<label >WS CONNECTION</label>
+			<p>
+				<input id="disconnect_radio" type="radio" name="yes_no" disabled checked>Disconnected</input>
+			</p>
+			<p>
+				<input id="connect_radio" type="radio" name="yes_no" disabled>Connected</input>
+			</p>
+		</div>
+	</form>
+	<br>
+
+	<button id="startVideo" class="btn btn-primary" onclick="WebSocketTest()">Start Live Stream</button>
+	<button id="terminate" class="btn btn-primary" onclick="leaveSessionNotfn()">Terminate session</button>
+
+	<button id="changeCameraViewReq" style="display: none;" class="btn btn-danger" onclick="changeCameraViewReq()">ChangeCameraViewReq</button>
+	<button id="changeLightSettingReq" style="display: none;" class="btn btn-warning" onclick="changeLightSettingReq()">ChangeLightSettingReq</button>
+
+	<!-- <a href="javascript:leaveSessionReq()">leave Session Req</a> -->
+	<div>
+		<span id="dot1" class="dot"></span>
+
+		<video class="button-28" id="remoteVideo" playsinline autoplay style="
+			width: 400px;
+			height: 300px;
+			border: 1px grey;
+			display: block;
+			background-color: whitesmoke;
+			margin-top: 10px;
+		"></video>		</div>
+</div>
+<script src="https://webrtc.github.io/adapter/adapter-latest.js"></script>
+</body>
+
+<script type="text/javascript">
+	var ws;
+	let pc2;
+	var sessionid;
+	var terminateRequested;
+	var reconnectAttempts = 4; //1; set reconnect to false...
+	var isReconnecting = false;
+
+	const offerOptions = {
+		offerToReceiveAudio: 1,
+		offerToReceiveVideo: 1
+	};
+	let candidates;
+	const remoteVideo = document.getElementById('remoteVideo');
+
+	document.getElementById('terminate').style.display = "none";
+	document.getElementById('startVideo').style.display = "block";
+	document.getElementById('dot1').style.display = "none";
+
+
+	remoteVideo.addEventListener('loadedmetadata', function () {
+		console.log(`Remote video videoWidth: ${this.videoWidth}px,  videoHeight: ${this.videoHeight}px`);
+		document.getElementById('changeCameraViewReq').style.display = "block";
+		document.getElementById('changeLightSettingReq').style.display = "block";
+	});
+
+	remoteVideo.addEventListener('resize', () => {
+		console.log(`Remote video size changed to ${remoteVideo.videoWidth}x${remoteVideo.videoHeight} - Time since pageload ${performance.now().toFixed(0)}ms`);
+		// We'll use the first onsize callback as an indication that video has started
+		// playing out.
+
+		// if (startTime) {
+		// 	const elapsedTime = window.performance.now() - startTime;
+		// 	console.log('Setup time: ' + elapsedTime.toFixed(3) + 'ms');
+		// 	startTime = null;
+		// }
+	});
+
+
+	function onCreateSessionDescriptionError(error) {
+		console.log(`Failed to create session description: ${error.toString()}`);
+	}
+
+	function onSetLocalSuccess(pc) {
+		console.log(` setLocalDescription complete`);
+
+		if(!$("#ice-gathering").is(':checked')){
+			inviteSessionResFunc(ws, pc2)
+		}
+	}
+
+	function onSetSessionDescriptionError(error) {
+		console.log(`Failed to set session description: ${error.toString()}`);
+	}
+
+	function gotRemoteStream(e) {
+		if (remoteVideo.srcObject !== e.streams[0]) {
+			console.log(e.streams[0])
+			remoteVideo.srcObject = e.streams[0];
+			console.log('pc2 received remote stream');
+			document.getElementById('startVideo').focus()
+		}
+	}
+
+	async function onCreateAnswerSuccess(desc) {
+		console.log(`Answer from pc2:\n${desc.sdp}`);
+		console.log('pc2 setLocalDescription start');
+		try {
+			await pc2.setLocalDescription(desc);
+			// onSetLocalSuccess(pc2);
+
+		} catch (e) {
+			onSetSessionDescriptionError(e);
+		}
+		console.log("done");
+
+	}
+
+	async function peerAddIceCandidate(pc, i, force) {
+		if (!$("#full-trickle").is(':checked') || force) {
+			if(i){
+				await pc.addIceCandidate(i)
+				console.log("add ice candidate to peer")
+			}
+		}
+	}
+
+	function inviteSessionResFunc(ws, pc2) {
+		const inviteSessionRes = {
+			"envelopeSchema": "com.gm.cei.messaging.types.v1.Command",
+			"messagingMode": "TEST",
+			"command": {
+				"id": Math.random().toString(16).slice(2),
+				"header": {
+					"publisherId": "mobileApp",
+					"name": "inviteSessionRes",
+					"version": "1.0",
+					"requestedOn": "",
+					"contentType": "application/json",
+					"contentSchema": "com.gm.ccms.ccs.v1.inviteSessionRes",
+					"replyTo": "",
+					"acceptLanguage": "en-US"
+				},
+				body: JSON.stringify({ sessionId: sessionid, messagePayload: pc2.localDescription.sdp })
+			}
+		}
+		document.getElementById('terminate').style.display = "block";
+		document.getElementById('startVideo').style.display = "none";
+		document.getElementById('dot1').style.display = "block";
+
+		//
+		ws.send(JSON.stringify(inviteSessionRes));
+		console.log("done");
+	}
+
+	async function onIceCandidate(event) {
+		if (event.candidate != null && !$("#ice-gathering").is(':checked')) {
+			try {
+				if(!candidates){
+					candidates = [];
+				}
+
+				if(pc2.canTrickleIceCandidates){
+					while( typeof (i = candidates.shift()) !== 'undefined' ) {
+						peerAddIceCandidate(pc2, i)
+						// await sendTrickleCandidate(i);
+					}
+					peerAddIceCandidate(pc2, event.candidate)
+					// await sendTrickleCandidate(last_candidate);
+				}else{
+					candidates.push(last_candidate);
+				}
+				// await (pc2.addIceCandidate(event.candidate));
+				onAddIceCandidateSuccess(event);
+			} catch (e) {
+				console.error(e)
+				onAddIceCandidateError(pc2, e);
+			}
+		}
+		else if($("#ice-gathering").is(':checked') && !event.candidate){
+			inviteSessionResFunc(ws, pc2)
+		}
+		console.log(` ICE candidate:\n${event.candidate ? event.candidate.candidate : '(null)'}`);
+	}
+
+	function onAddIceCandidateSuccess(event) {
+		console.log("onAddIceCandidateSuccess");
+		last_candidate = {
+			"candidate": event.candidate.candidate,
+			"sdpMid": event.candidate.sdpMid,
+			"sdpMLineIndex": event.candidate.sdpMLineIndex
+		};
+		sendTrickleCandidate(last_candidate)
+		// console.log(`${getName(pc)} addIceCandidate success`);
+	}
+
+	function onAddIceCandidateError(pc, error) {
+		console.log(` failed to add ICE Candidate: ${error.toString()}`);
+	}
+
+
+	function onIceStateChange(pc, event) {
+		if (pc) {
+			console.log(`******************ICE state: ${pc.iceConnectionState}`);
+			console.log('ICE state change event: ', event);
+
+			if(!candidates){
+				candidates = []
+			}
+
+			if(pc2.canTrickleIceCandidates){
+				while( typeof (i = candidates.shift()) !== 'undefined' ) {
+					peerAddIceCandidate(pc, i)
+					// sendTrickleCandidate(i);
+				}
+			}
+
+			if(pc.iceConnectionState === "connected" ||
+					pc.iceConnectionState === "completed"){
+				var videoTag = document.getElementById("remoteVideo")
+				var localStream = videoTag.captureStream(0);
+				// pc1 = new RTCPeerConnection(configuration);
+				localStream.getTracks().forEach(
+						function (track) {
+							pc2.addTrack(
+									track,
+									localStream
+							);
+						}
+				);
+			}
+		}
+	}
+
+	function leaveSessionNotfn() {
+		terminateRequested = true;
+
+		const leaveSessionNotfn = {
+			"envelopeSchema": "com.gm.cei.messaging.types.v1.Command",
+			"messagingMode": "TEST",
+			"command": {
+				"id": Math.random().toString(16).slice(2),
+				"header": {
+					"publisherId": "mobileApp",
+					"name": "leaveSessionNotfn",
+					"version": "1.0",
+					"requestedOn": "",
+					"contentType": "application/json",
+					"contentSchema": "com.gm.ccms.ccs.v1.leaveSessionNotfn",
+					"acceptLanguage": "en-US"
+				},
+				body: JSON.stringify({ sessionId: sessionid, terminateReason: "USER_DECISION" })
+			}
+		}
+		ws.send(JSON.stringify(leaveSessionNotfn));
+		document.getElementById('remoteVideo').srcObject = null;
+		document.getElementById('terminate').style.display = "none";
+		document.getElementById('startVideo').style.display = "block";
+		document.getElementById('dot1').style.display = "none";
+
+	}
+
+	function changeCameraViewReq() {
+		const changeCameraViewReq = {
+			"envelopeSchema": "com.gm.cei.messaging.types.v1.Command",
+			"messagingMode": "TEST",
+			"command": {
+				"id": Math.random().toString(16).slice(2),
+				"header": {
+					"publisherId": "mobileApp",
+					"name": "changeCameraViewReq",
+					"version": "1.0",
+					"requestedOn": "",
+					"contentType": "application/json",
+					"contentSchema": "com.gm.ccms.ccs.v1.changeCameraViewReq",
+					"acceptLanguage": "en-US"
+				},
+				body: JSON.stringify({ sessionId: sessionid, cameraView: "MOSAIC" })
+			}
+		}
+		ws.send(JSON.stringify(changeCameraViewReq));
+	}
+
+	function changeLightSettingReq() {
+		const changeLightSettingReq = {
+			"envelopeSchema": "com.gm.cei.messaging.types.v1.Command",
+			"messagingMode": "TEST",
+			"command": {
+				"id": Math.random().toString(16).slice(2),
+				"header": {
+					"publisherId": "mobileApp",
+					"name": "changeLightSettingReq",
+					"version": "1.0",
+					"requestedOn": "",
+					"contentType": "application/json",
+					"contentSchema": "com.gm.ccms.ccs.v1.changeLightSettingReq",
+					"acceptLanguage": "en-US"
+				},
+				body: JSON.stringify({ sessionId: sessionid, lightType:"EXTERIOR",lightState:"ON"})
+			}
+		}
+		ws.send(JSON.stringify(changeLightSettingReq));
+	}
+
+	function sendTrickleCandidate(candidate) {
+		if (ws.readyState === WebSocket.OPEN){
+			var client_id = document.getElementById('client_id').value
+			const commandTrickle =
+					{
+						"envelopeSchema": "com.gm.cei.messaging.types.v1.Command",
+						"messagingMode": "TEST",
+						"command": {
+							"id": Math.random().toString(16).slice(2),
+							"header": {
+								"publisherId": "mobileApp",
+								"name": "sendTrickleForICE",
+								"version": "1.0",
+								"requestedOn": "",
+								"contentType": "application/json",
+								"contentSchema": "com.gm.ccms.ccs.v1.createSessionReq",
+								"acceptLanguage": "en-US"
+							},
+							body: JSON.stringify({id: client_id, candidate: candidate })
+						}
+					}
+			ws.send(JSON.stringify(commandTrickle));
+		}
+	}
+
+	async function reconnect() {
+		await new Promise(resolve => setTimeout(resolve, 5000 * reconnectAttempts));
+		reconnectAttempts++;
+
+		console.log("Attempting reconnect...");
+
+		isReconnecting = true;
+		WebSocketTest();
+	};
+
+	async function WebSocketTest() {
+		ip_addr = document.getElementById('ip').value
+		vin = document.getElementById('vin').value
+		client_id = document.getElementById('client_id').value
+		terminateRequested = false;
+
+		if ("WebSocket" in window) {
+			// Let us open a web socket
+			ws = new WebSocket(`ws://${ip_addr}/Mobile/vehicles/${vin}/cameras/connect/${client_id}`);
+
+			ws.onopen = function () {
+				// Web Socket is connected, send data using send()
+				document.getElementById("disconnect_radio").checked = false;
+				document.getElementById("connect_radio").checked = true;
+				// alert("Client : Establish Websockets Connection");
+			};
+
+			ws.onmessage = function (evt) {
+				var received_msg = evt.data;
+				// alert(received_msg);
+				const obj = JSON.parse(received_msg);
+
+				if(!obj.command.id){
+					console.error("no id for command " + obj.command.header.name)
+				}
+
+				if (obj.command.header.name === "sessionInfoNotfn" && !isReconnecting) {
+
+					const subscribeSessionReq = {
+						"envelopeSchema": "com.gm.cei.messaging.types.v1.Command",
+						"messagingMode": "TEST",
+						"command": {
+							"id": Math.random().toString(16).slice(2),
+							"header": {
+								"publisherId": "mobileApp",
+								"name": "subscribeSessionReq",
+								"version": "1.0",
+								"requestedOn": "<<timestamp>>",
+								"contentType": "application/json",
+								"contentSchema": "com.gm.ccms.ccs.v1.subscribeSessionReq",
+								"acceptLanguage": "en-US"
+							},
+							body: JSON.stringify({ sessionId: JSON.parse(obj.command.body).sessionId })
+						}
+					}
+					// alert(JSON.stringify(subscribeSessionReq));
+					ws.send(JSON.stringify(subscribeSessionReq));
+				}
+				else if (obj.command.header.name === "inviteSessionReq" && !isReconnecting) {
+					const configuration = {};
+					pc2 = new RTCPeerConnection(configuration);
+					console.log('Created remote peer connection object pc2');
+					pc2.addEventListener('icecandidate', e => onIceCandidate(e));
+					pc2.addEventListener('iceconnectionstatechange', e => onIceStateChange(pc2, e));
+					pc2.addEventListener('track', gotRemoteStream);
+					let offer = { type: "offer", sdp: JSON.parse(obj.command.body).messagePayload }
+					console.log('pc2 setRemoteDescription start');
+					sessionid = JSON.parse(obj.command.body).sessionId;
+					try {
+						pc2.setRemoteDescription(offer).then(() => {
+							console.log('pc2 createAnswer start');
+							// Since the 'remote' side has no media stream we need
+							// to pass in the right constraints in order for it to
+							// accept the incoming offer of audio and video.
+
+							pc2.createAnswer().then(function(answer) {
+								return pc2.setLocalDescription(answer);
+							})
+									.then(function() {
+										onSetLocalSuccess(pc2);
+									})
+									.catch(function(err) {
+										console.log(err.name + ': ' + err.message);
+									});
+
+							// pc2.createAnswer().then(answer => {
+							// 	onCreateAnswerSuccess(answer).then(() => {
+							// 		pc2.setLocalDescription(answer).then(() => {
+							// 			onSetLocalSuccess(pc2);
+							// 		}).catch(error => {
+							// 			console.error(error)
+							// 			onSetSessionDescriptionError(error);
+							// 		});
+							//
+							// 	});
+							// })
+						});
+					}
+					catch (e) {
+
+					}
+				}
+				else if (obj.command.header.name === "leaveSessionReq") {
+					terminateRequested = true
+					const commandResponse = {
+						"envelopeSchema": "com.gm.cei.messaging.types.v1.Command",
+						"messagingMode": "TEST",
+						"command": {
+							"id": Math.random().toString(16).slice(2),
+							"header": {
+								"publisherId": "mobileApp",
+								"name": "commandResponse",
+								"version": "1.0",
+								"requestedOn": "",
+								"contentType": "application/json",
+								"contentSchema": "com.gm.ccms.ccs.v1.createSessionReq",
+								"acceptLanguage": "en-US"
+							},
+							body: JSON.stringify({ sessionId: sessionid,
+								status: "SUCCESS",
+								requestId: obj.command.id
+							})
+						}
+					}
+
+					document.getElementById('remoteVideo').srcObject = null;
+					document.getElementById('terminate').style.display = "none";
+					document.getElementById('startVideo').style.display = "block";
+					document.getElementById('dot1').style.display = "none";
+					ws.send(JSON.stringify(commandResponse));
+				}else if (obj.command.header.name === "notifyTrickle") {
+					var last_candidate = obj.command.body.candidate
+					try{
+						if(!candidates){
+							candidates = [];
+						}
+
+						if(pc2.canTrickleIceCandidates){
+							while( typeof (i = candidates.shift()) !== 'undefined' ) {
+								peerAddIceCandidate(pc2, i, true)
+							}
+							peerAddIceCandidate(pc2, last_candidate, true)
+						}else{
+							candidates.push(last_candidate);
+						}
+					}catch (e){
+						console.error(e)
+					}
+
+				}else if (obj.command.header.name === "inviteSessionNotfn") {
+					console.log("inviteSessionNotfn");
+				}
+			};
+
+			ws.onpong =function(mess) {
+				console.log(' receive a pong : ' + mess); ws.pong()
+			};
+
+			ws.onping = function(mess) {
+				console.log(' receive a ping : ' + mess); ws.ping()
+			};
+
+			ws.onclose = function () {
+				// websocket is closed.
+
+				if (terminateRequested || reconnectAttempts > 3) {
+					document.getElementById('changeCameraViewReq').style.display = "none";
+					document.getElementById('changeLightSettingReq').style.display = "none";
+
+					document.getElementById("disconnect_radio").checked = true;
+					document.getElementById("connect_radio").checked = false;
+					console.log("Connection is closed...");
+					location.reload();
+				} else {
+					reconnect();
+				}
+			};
+		} else {
+
+			// The browser doesn't support WebSocket
+			alert("WebSocket NOT supported by your Browser!");
+		}
+	}
+</script>
+
+
+
+</html>
